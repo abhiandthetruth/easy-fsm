@@ -19,9 +19,17 @@ import com.grookage.fsm.core.action.DefaultErrorAction;
 import com.grookage.fsm.core.exceptions.FsmException;
 import com.grookage.fsm.core.exceptions.InvalidStateException;
 import com.grookage.fsm.core.exceptions.StateNotFoundException;
-import com.grookage.fsm.core.models.entities.*;
+import com.grookage.fsm.core.models.entities.Context;
+import com.grookage.fsm.core.models.entities.Event;
+import com.grookage.fsm.core.models.entities.EventType;
+import com.grookage.fsm.core.models.entities.State;
+import com.grookage.fsm.core.models.entities.Transition;
+import com.grookage.fsm.core.models.entities.TransitionKey;
+import com.grookage.fsm.core.models.executors.AfterStateTransitionAction;
+import com.grookage.fsm.core.models.executors.BeforeStateTransitionAction;
 import com.grookage.fsm.core.models.executors.ErrorAction;
 import com.grookage.fsm.core.models.executors.EventAction;
+import com.grookage.fsm.core.models.executors.FinalStateAction;
 import com.grookage.fsm.core.services.ActionService;
 import com.grookage.fsm.core.services.StateManagementService;
 import com.grookage.fsm.core.services.TransitionService;
@@ -64,66 +72,66 @@ public class StateEngine<E extends Event, S extends State, K extends TransitionK
     stateManagementService.addEndStates(endStates);
   }
 
-  public StateEngine<E, S, K, C> addError(final ErrorAction<E, S, K, C> errorHandler) {
+  public StateEngine<E, S, K, C> addErrorAction(final ErrorAction<C> errorHandler) {
     this.actionService.setHandler(EventType.ERROR, null, null, errorHandler);
     return this;
   }
 
-  public StateEngine<E, S, K, C> beforeTransition(final EventAction<E, S, K, C> before) {
+  public StateEngine<E, S, K, C> addBeforeAnyTransitionAction(final BeforeStateTransitionAction<S, E, K, C> before) {
     actionService.beforeTransition(null, before);
     return this;
   }
 
-  public StateEngine<E, S, K, C> afterTransition(final EventAction<E, S, K, C> after) {
+  public StateEngine<E, S, K, C> addAfterAnyTransitionAction(final AfterStateTransitionAction<S, E, K, C> after) {
     actionService.afterTransition(null, after);
     return this;
   }
 
-  public StateEngine<E, S, K, C> beforeTransitionTo(final S state,
-      final EventAction<E, S, K, C> before) {
+  public StateEngine<E, S, K, C> addBeforeStateTransitionAction(final S state,
+      final BeforeStateTransitionAction<S, E, K, C> before) {
     actionService.beforeTransition(state, before);
     return this;
   }
 
-  public StateEngine<E, S, K, C> afterTransitionFrom(final S state,
-      final EventAction<E, S, K, C> after) {
+  public StateEngine<E, S, K, C> addAfterStateTransitionAction(final S state,
+      final AfterStateTransitionAction<S, E, K, C> after) {
     actionService.afterTransition(state, after);
     return this;
   }
 
-  public StateEngine<E, S, K, C> anyTransition(final EventAction<E, S, K, C> transition) {
+  public StateEngine<E, S, K, C> addAnyStateTransitionAction(final EventAction<E, S, K, C> transition) {
     actionService.anyTransition(transition);
     return this;
   }
 
-  public StateEngine<E, S, K, C> forTransition(final S state,
-      final EventAction<E, S, K, C> context) {
-    actionService.forTransition(null, state, context);
+  public StateEngine<E, S, K, C> addStateTransitionAction(final S state,
+      final EventAction<E, S, K, C> action) {
+    actionService.forTransition(null, state, action);
     return this;
   }
 
-  public StateEngine<E, S, K, C> forTransition(final E event, final S state,
-      final EventAction<E, S, K, C> context) {
-    actionService.forTransition(event, state, context);
+  public StateEngine<E, S, K, C> addStateTransitionAction(final E event, final S state,
+      final EventAction<E, S, K, C> action) {
+    actionService.forTransition(event, state, action);
     return this;
   }
 
-  public StateEngine<E, S, K, C> onFinalState(final S state,
-      final EventAction<E, S, K, C> context) {
-    actionService.onFinalState(state, context);
+  public StateEngine<E, S, K, C> addFinalStateAction(final S state,
+      final FinalStateAction<S, E, K, C> action) {
+    actionService.onFinalState(state, action);
     return this;
   }
 
-  private void handleStateTransition(final E event, final S from, final C context) {
-    actionService.handleTransition(event, from, context);
+  private void handleStateTransition(final E event, final S from, final S to, final C context) {
+    actionService.handleTransition(event, from, to, context);
   }
 
-  private void handleLanding(final S from, final C context) {
-    actionService.handleLanding(from, context);
+  private void handleLanding(final S to, final E event, final S from, final C context) {
+    actionService.handleLanding(to, event, from, context);
   }
 
-  private void handleTakeOff(final S to, final C context) {
-    actionService.handleTakeOff(to, context);
+  private void handleTakeOff(final S from, final E event, final S to, final C context) {
+    actionService.handleTakeOff(from, event, to, context);
   }
 
   public Optional<Transition<E, S>> getTransition(final S from, final E event) {
@@ -146,11 +154,21 @@ public class StateEngine<E extends Event, S extends State, K extends TransitionK
     }
     try {
       var to = transition.get().getTo();
-      handleTakeOff(to, context);
-      handleStateTransition(event, from, context);
-      handleLanding(from, context);
+      context.setTo(to);
+      handleTakeOff(from, event, to, context);
+      handleStateTransition(event, from, to, context);
+      handleLanding(to, event, from, context);
+      stateManagementService.setFrom(to);
+      if (stateManagementService.getEndStates().contains(to)) {
+        actionService.handleFinalState(to, context);
+      }
     } catch (Exception e) {
       handleError(new FsmException(from, event, e, e.getMessage(), context));
+      // Rethrow the exception if it's not handled by a custom error handler
+      // This maintains the original behavior of failing fast if no error handler is defined.
+      if (!(actionService.getHandlers().get(new HandlerType(EventType.ERROR, null, null)).get(0) instanceof DefaultErrorAction)) {
+        throw e;
+      }
     }
   }
 
