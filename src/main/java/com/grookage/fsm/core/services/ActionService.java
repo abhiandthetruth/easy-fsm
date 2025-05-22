@@ -50,10 +50,6 @@ public class ActionService<E extends Event, S extends State, K extends Transitio
     handlers = new HashMap<>();
   }
 
-  private void addHandler(HandlerType<E, S> handlerType, Action action) {
-    handlers.computeIfAbsent(handlerType, k -> new ArrayList<>()).add(action);
-  }
-
   public void anyTransition(EventAction<E, S, K, C> action) {
     addHandler(new HandlerType<>(EventType.ANY_STATE_TRANSITION, null, null), action);
   }
@@ -124,6 +120,14 @@ public class ActionService<E extends Event, S extends State, K extends Transitio
     }
   }
 
+  public void setHandler(EventType eventType, S state, E event, Action action) {
+    addHandler(new HandlerType<>(eventType, event, state), action);
+  }
+
+  private void addHandler(HandlerType<E, S> handlerType, Action action) {
+    handlers.computeIfAbsent(handlerType, k -> new ArrayList<>()).add(action);
+  }
+
   private void executeActions(HandlerType<E, S> handlerType, S from, S to, E event, C context) {
     List<Action> actions = handlers.get(handlerType);
     if (!Objects.isNull(actions)) {
@@ -137,9 +141,5 @@ public class ActionService<E extends Event, S extends State, K extends Transitio
         }
       }
     }
-  }
-
-  public void setHandler(EventType eventType, S state, E event, Action action) {
-    addHandler(new HandlerType<>(eventType, event, state), action);
   }
 }
