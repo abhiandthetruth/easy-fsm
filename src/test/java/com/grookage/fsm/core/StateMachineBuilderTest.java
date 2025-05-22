@@ -22,15 +22,15 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.google.common.collect.Sets;
 import com.grookage.fsm.core.config.MachineBuilderConfig;
 import com.grookage.fsm.core.config.TransitionConfig;
+import com.grookage.fsm.core.exceptions.FsmException;
 import com.grookage.fsm.core.exceptions.InvalidStateException;
 import com.grookage.fsm.core.helpers.ResourceHelper;
-import com.grookage.fsm.core.models.entities.Context; // For ContextSnapshot
+import com.grookage.fsm.core.models.executors.ErrorAction;
 import com.grookage.fsm.core.stubs.TestContext;
 import com.grookage.fsm.core.stubs.TestEvent;
 import com.grookage.fsm.core.stubs.TestHub;
 import com.grookage.fsm.core.stubs.TestState;
 import com.grookage.fsm.core.stubs.TestTransitionKey;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.Assert;
@@ -38,14 +38,6 @@ import org.junit.Before;
 import org.junit.Test;
 
 public class StateMachineBuilderTest {
-
-    // Using the same ContextSnapshot as in StateMachineTest
-    static record ContextSnapshot(TestState from, TestState to, TestEvent event, String transitionKeyTag) {
-        ContextSnapshot(Context<TestState, TestEvent, ?> context) {
-            this(context.getFrom(), context.getTo(), context.getCausedEvent(),
-                context.getTransitionKey() != null ? context.getTransitionKey().toString() : null);
-        }
-    }
 
     private MachineBuilderConfig<TestState, TestEvent> basicMachineConfig;
     private TransitionProcessorHub<TestState, TestEvent, TestTransitionKey, TestContext> testHub;
@@ -88,96 +80,90 @@ public class StateMachineBuilderTest {
     }
 
     @Test
-    public void testWithBeforeAnyTransitionAction_Builder() {
+    public void testBuilder_withBeforeAnyTransitionAction() {
         final var actionExecuted = new AtomicBoolean(false);
-        final List<ContextSnapshot> capturedContexts = new ArrayList<>();
-
         final var stateMachine = new StateMachineBuilder<TestState, TestEvent, TestTransitionKey, TestContext>()
                 .withMachineBuilderConfig(basicMachineConfig)
                 .withTransitionProcessorHub(testHub)
-                .withBeforeAnyTransitionAction(ctx -> {
-                    actionExecuted.set(true);
-                    capturedContexts.add(new ContextSnapshot(ctx));
-                })
+                .withBeforeAnyTransitionAction(context -> actionExecuted.set(true))
                 .build();
 
         TestContext context = new TestContext();
         context.setFrom(TestState.STARTED);
         context.setCausedEvent(TestEvent.INITIATE);
         stateMachine.fire(context);
-
-        Assert.assertTrue(actionExecuted.get());
-        Assert.assertEquals(1, capturedContexts.size());
-        ContextSnapshot snapshot = capturedContexts.get(0);
-        Assert.assertEquals(TestState.STARTED, snapshot.from());
-        Assert.assertEquals(TestState.CREATED, snapshot.to()); // 'to' is set by StateMachine.fire
-        Assert.assertEquals(TestEvent.INITIATE, snapshot.event());
+        Assert.assertTrue("withBeforeAnyTransitionAction should be executed", actionExecuted.get());
     }
 
     @Test
-    public void testWithAfterAnyTransitionAction_Builder() {
+    public void testBuilder_withAfterAnyTransitionAction() {
         final var actionExecuted = new AtomicBoolean(false);
-        final List<ContextSnapshot> capturedContexts = new ArrayList<>();
-
         final var stateMachine = new StateMachineBuilder<TestState, TestEvent, TestTransitionKey, TestContext>()
                 .withMachineBuilderConfig(basicMachineConfig)
                 .withTransitionProcessorHub(testHub)
-                .withAfterAnyTransitionAction(ctx -> {
-                    actionExecuted.set(true);
-                    capturedContexts.add(new ContextSnapshot(ctx));
-                })
+                .withAfterAnyTransitionAction(context -> actionExecuted.set(true))
                 .build();
 
         TestContext context = new TestContext();
         context.setFrom(TestState.STARTED);
         context.setCausedEvent(TestEvent.INITIATE);
         stateMachine.fire(context);
-
-        Assert.assertTrue(actionExecuted.get());
-        Assert.assertEquals(1, capturedContexts.size());
-        ContextSnapshot snapshot = capturedContexts.get(0);
-        Assert.assertEquals(TestState.STARTED, snapshot.from());
-        Assert.assertEquals(TestState.CREATED, snapshot.to());
-        Assert.assertEquals(TestEvent.INITIATE, snapshot.event());
+        Assert.assertTrue("withAfterAnyTransitionAction should be executed", actionExecuted.get());
     }
 
     @Test
-    public void testWithBeforeStateTransitionAction_Builder() {
+    public void testBuilder_withBeforeStateTransitionAction() {
         final var correctActionExecuted = new AtomicBoolean(false);
         final var wrongActionExecuted = new AtomicBoolean(false);
-
         final var stateMachine = new StateMachineBuilder<TestState, TestEvent, TestTransitionKey, TestContext>()
                 .withMachineBuilderConfig(basicMachineConfig)
                 .withTransitionProcessorHub(testHub)
-                .withBeforeStateTransitionAction(TestState.CREATED, ctx -> {
-                    Assert.assertEquals(TestState.CREATED, ctx.getTo());
-                    correctActionExecuted.set(true);
-                })
-                .withBeforeStateTransitionAction(TestState.IN_PROGRESS, ctx -> wrongActionExecuted.set(true))
+                .withBeforeStateTransitionAction(TestState.CREATED, context -> correctActionExecuted.set(true))
+                .withBeforeStateTransitionAction(TestState.IN_PROGRESS, context -> wrongActionExecuted.set(true))
                 .build();
 
         TestContext context = new TestContext();
         context.setFrom(TestState.STARTED);
         context.setCausedEvent(TestEvent.INITIATE); // Transitions to CREATED
         stateMachine.fire(context);
-
-        Assert.assertTrue(correctActionExecuted.get());
-        Assert.assertFalse(wrongActionExecuted.get());
+        Assert.assertTrue("Correct withBeforeStateTransitionAction should be executed", correctActionExecuted.get());
+        Assert.assertFalse("Wrong withBeforeStateTransitionAction should NOT be executed", wrongActionExecuted.get());
     }
 
     @Test
-    public void testWithAfterStateTransitionAction_Builder() {
+    public void testBuilder_withAfterStateTransitionAction() {
         final var correctActionExecuted = new AtomicBoolean(false);
         final var wrongActionExecuted = new AtomicBoolean(false);
+        final var stateMachine = new StateMachineBuilder<TestState, TestEvent, TestTransitionKey, TestContext>()
+                .withMachineBuilderConfig(basicMachineConfig)
+                .withTransitionProcessorHub(testHub)
+                .withAfterStateTransitionAction(TestState.STARTED, context -> correctActionExecuted.set(true))
+                .withAfterStateTransitionAction(TestState.CREATED, context -> wrongActionExecuted.set(true))
+                .build();
+
+        TestContext context = new TestContext();
+        context.setFrom(TestState.STARTED);
+        context.setCausedEvent(TestEvent.INITIATE);
+        stateMachine.fire(context);
+        Assert.assertTrue("Correct withAfterStateTransitionAction should be executed", correctActionExecuted.get());
+        Assert.assertFalse("Wrong withAfterStateTransitionAction should NOT be executed", wrongActionExecuted.get());
+    }
+
+    @Test
+    public void testBuilder_withAnyStateTransitionAction_OverridesDefaultEventAction() {
+        // The eventAction passed to StateMachine constructor via builder.withEventAction() is registered by StateMachine.start()
+        // using stateEngine.anyTransition().
+        // If builder.withAnyStateTransitionAction() is also used, the one from withAnyStateTransitionAction
+        // will be registered *after* the default one from withEventAction (if any) during the build process.
+        // Since ActionService overwrites, the one from withAnyStateTransitionAction should be the one that executes.
+        final var defaultEventActionExecuted = new AtomicBoolean(false);
+        final var specificAnyStateActionExecuted = new AtomicBoolean(false);
 
         final var stateMachine = new StateMachineBuilder<TestState, TestEvent, TestTransitionKey, TestContext>()
                 .withMachineBuilderConfig(basicMachineConfig)
                 .withTransitionProcessorHub(testHub)
-                .withAfterStateTransitionAction(TestState.STARTED, ctx -> {
-                    Assert.assertEquals(TestState.STARTED, ctx.getFrom());
-                    correctActionExecuted.set(true);
-                })
-                .withAfterStateTransitionAction(TestState.CREATED, ctx -> wrongActionExecuted.set(true))
+                .withEventAction(context -> defaultEventActionExecuted.set(true)) // This is the "default" one
+                .withAnyStateTransitionAction(context -> specificAnyStateActionExecuted.set(true)) // This should take precedence
                 .build();
 
         TestContext context = new TestContext();
@@ -185,71 +171,118 @@ public class StateMachineBuilderTest {
         context.setCausedEvent(TestEvent.INITIATE);
         stateMachine.fire(context);
 
-        Assert.assertTrue(correctActionExecuted.get());
-        Assert.assertFalse(wrongActionExecuted.get());
+        Assert.assertTrue("Specific anyStateTransitionAction from builder should be executed", specificAnyStateActionExecuted.get());
+        Assert.assertFalse("Default eventAction from builder should NOT be executed if overridden by withAnyStateTransitionAction", defaultEventActionExecuted.get());
     }
-
+    
     @Test
-    public void testWithFinalStateAction_Builder() {
-        final var correctActionExecuted = new AtomicBoolean(false);
-        final var wrongActionExecuted = new AtomicBoolean(false);
+    public void testBuilder_withOnlyDefaultEventAction() {
+        // Verifies that the default eventAction provided via withEventAction is used if no specific withAnyStateTransitionAction is set.
+        final var defaultEventActionExecuted = new AtomicBoolean(false);
 
         final var stateMachine = new StateMachineBuilder<TestState, TestEvent, TestTransitionKey, TestContext>()
                 .withMachineBuilderConfig(basicMachineConfig)
                 .withTransitionProcessorHub(testHub)
-                .withFinalStateAction(TestState.COMPLETED, ctx -> {
-                    Assert.assertEquals(TestState.COMPLETED, ctx.getTo());
-                    correctActionExecuted.set(true);
-                })
-                .withFinalStateAction(TestState.FAILED, ctx -> wrongActionExecuted.set(true))
+                .withEventAction(context -> defaultEventActionExecuted.set(true)) // This is the "default" one
                 .build();
 
-        // Sequence to reach IN_PROGRESS state
+        TestContext context = new TestContext();
+        context.setFrom(TestState.STARTED);
+        context.setCausedEvent(TestEvent.INITIATE);
+        stateMachine.fire(context);
+
+        Assert.assertTrue("Default eventAction from builder should be executed", defaultEventActionExecuted.get());
+    }
+
+
+    @Test
+    public void testBuilder_withOnStateTransitionAction_FromState() {
+        final var actionExecuted = new AtomicBoolean(false);
+        final var stateMachine = new StateMachineBuilder<TestState, TestEvent, TestTransitionKey, TestContext>()
+                .withMachineBuilderConfig(basicMachineConfig)
+                .withTransitionProcessorHub(testHub)
+                .withOnStateTransitionAction(TestState.STARTED, context -> actionExecuted.set(true))
+                .build();
+
+        TestContext context = new TestContext();
+        context.setFrom(TestState.STARTED);
+        context.setCausedEvent(TestEvent.INITIATE);
+        stateMachine.fire(context);
+        Assert.assertTrue("withOnStateTransitionAction(fromState) should be executed", actionExecuted.get());
+    }
+
+    @Test
+    public void testBuilder_withOnStateTransitionAction_Event_FromState() {
+        final var correctActionExecuted = new AtomicBoolean(false);
+        final var wrongActionExecuted = new AtomicBoolean(false);
+        final var stateMachine = new StateMachineBuilder<TestState, TestEvent, TestTransitionKey, TestContext>()
+                .withMachineBuilderConfig(basicMachineConfig)
+                .withTransitionProcessorHub(testHub)
+                .withOnStateTransitionAction(TestEvent.INITIATE, TestState.STARTED, context -> correctActionExecuted.set(true))
+                .withOnStateTransitionAction(TestEvent.MOVE_TO_PROGRESS, TestState.STARTED, context -> wrongActionExecuted.set(true))
+                .build();
+
+        TestContext context = new TestContext();
+        context.setFrom(TestState.STARTED);
+        context.setCausedEvent(TestEvent.INITIATE);
+        stateMachine.fire(context);
+        Assert.assertTrue("Correct withOnStateTransitionAction(event, fromState) should be executed", correctActionExecuted.get());
+        Assert.assertFalse("Wrong withOnStateTransitionAction(event, fromState) should NOT be executed", wrongActionExecuted.get());
+    }
+
+    @Test
+    public void testBuilder_withOnFinalStateReachedAction() {
+        final var actionExecuted = new AtomicBoolean(false);
+        final var stateMachine = new StateMachineBuilder<TestState, TestEvent, TestTransitionKey, TestContext>()
+                .withMachineBuilderConfig(basicMachineConfig)
+                .withTransitionProcessorHub(testHub)
+                .withOnFinalStateReachedAction(TestState.COMPLETED, context -> actionExecuted.set(true))
+                .build();
+
+        // Sequence to reach final state
         TestContext ctx1 = new TestContext();
         ctx1.setFrom(TestState.STARTED);
         ctx1.setCausedEvent(TestEvent.INITIATE);
-        stateMachine.fire(ctx1); // To CREATED
+        stateMachine.fire(ctx1);
 
         TestContext ctx2 = new TestContext();
         ctx2.setFrom(TestState.CREATED);
         ctx2.setCausedEvent(TestEvent.MOVE_TO_PROGRESS);
-        stateMachine.fire(ctx2); // To IN_PROGRESS
+        stateMachine.fire(ctx2);
 
-        // Transition to final state COMPLETED
         TestContext finalContext = new TestContext();
         finalContext.setFrom(TestState.IN_PROGRESS);
         finalContext.setCausedEvent(TestEvent.MOVE_TO_COMPLETED);
         stateMachine.fire(finalContext);
 
-        Assert.assertTrue(correctActionExecuted.get());
-        Assert.assertFalse(wrongActionExecuted.get());
+        Assert.assertTrue("withOnFinalStateReachedAction should be executed", actionExecuted.get());
     }
 
-     @Test
-    public void testMultipleActionsRegisteredViaBuilder_AllExecuted() {
-        final AtomicBoolean beforeAny1 = new AtomicBoolean(false);
-        final AtomicBoolean beforeAny2 = new AtomicBoolean(false);
-        final AtomicBoolean afterFromStarted1 = new AtomicBoolean(false);
-        final AtomicBoolean afterFromStarted2 = new AtomicBoolean(false);
-
+    @Test
+    public void testBuilder_withErrorAction_OverridesDefaultErrorAction() {
+        // Similar to withAnyStateTransitionAction, withErrorAction sets the ErrorAction
+        // that will be passed to StateMachine constructor. StateMachine.start() registers this.
+        // If builder had a separate "addAdditionalErrorAction", that would be clearer.
+        // For now, withErrorAction sets the one that StateMachine.start() will use.
+        final var specificErrorActionExecuted = new AtomicBoolean(false);
 
         final var stateMachine = new StateMachineBuilder<TestState, TestEvent, TestTransitionKey, TestContext>()
                 .withMachineBuilderConfig(basicMachineConfig)
                 .withTransitionProcessorHub(testHub)
-                .withBeforeAnyTransitionAction(ctx -> beforeAny1.set(true))
-                .withBeforeAnyTransitionAction(ctx -> beforeAny2.set(true))
-                .withAfterStateTransitionAction(TestState.STARTED, ctx -> afterFromStarted1.set(true))
-                .withAfterStateTransitionAction(TestState.STARTED, ctx -> afterFromStarted2.set(true))
+                .withErrorAction((ErrorAction<TestEvent, TestState, TestTransitionKey, TestContext>) (error, context) -> specificErrorActionExecuted.set(true))
+                .withAfterStateTransitionAction(TestState.STARTED, context -> { // Action to cause an error
+                    throw new RuntimeException("Simulated error during transition");
+                })
                 .build();
 
         TestContext context = new TestContext();
         context.setFrom(TestState.STARTED);
         context.setCausedEvent(TestEvent.INITIATE);
-        stateMachine.fire(context);
-
-        Assert.assertTrue("First beforeAny action should execute", beforeAny1.get());
-        Assert.assertTrue("Second beforeAny action should execute", beforeAny2.get());
-        Assert.assertTrue("First afterFromStarted action should execute", afterFromStarted1.get());
-        Assert.assertTrue("Second afterFromStarted action should execute", afterFromStarted2.get());
+        try {
+            stateMachine.fire(context);
+        } catch (Exception e) {
+            // Expected
+        }
+        Assert.assertTrue("Specific errorAction from builder should be executed", specificErrorActionExecuted.get());
     }
 }

@@ -34,35 +34,37 @@ import com.grookage.fsm.core.models.executors.EventAction;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-import java.util.ArrayList;
-import java.util.List;
+// No new imports needed if not using Pair and keeping fields separate
 
 @NoArgsConstructor
 public class StateMachineBuilder<S extends State, E extends Event, K extends TransitionKey, C extends Context<S, E, K>> {
 
-    // Helper class
-    private static class ActionWithState<S_TYPE, ACTION_TYPE> {
-        S_TYPE state;
-        ACTION_TYPE action;
-        ActionWithState(S_TYPE state, ACTION_TYPE action) {
-            this.state = state;
-            this.action = action;
-        }
-        S_TYPE getState() { return state; }
-        ACTION_TYPE getAction() { return action; }
-    }
-
     private MachineBuilderConfig<S, E> machineBuilderConfig;
     private TransitionProcessorHub<S, E, K, C> transitionProcessorHub;
-    private ErrorAction<E, S, K, C> errorAction;
-    private EventAction<E, S, K, C> eventAction; // This is the main/default event action
+    private ErrorAction<E, S, K, C> errorAction; // Default error action
+    private EventAction<E, S, K, C> eventAction; // Default event action (for StateMachine's main transition processing)
 
     // New fields for action storage
-    private List<EventAction<E, S, K, C>> beforeAnyTransitionActions = new ArrayList<>();
-    private List<EventAction<E, S, K, C>> afterAnyTransitionActions = new ArrayList<>();
-    private List<ActionWithState<S, EventAction<E, S, K, C>>> beforeStateTransitionActionsList = new ArrayList<>();
-    private List<ActionWithState<S, EventAction<E, S, K, C>>> afterStateTransitionActionsList = new ArrayList<>();
-    private List<ActionWithState<S, EventAction<E, S, K, C>>> finalStateActionsList = new ArrayList<>();
+    private EventAction<E, S, K, C> beforeAnyTransitionAction;
+    private EventAction<E, S, K, C> afterAnyTransitionAction;
+
+    private S beforeStateTransition_toState;
+    private EventAction<E, S, K, C> beforeStateTransition_action;
+
+    private S afterStateTransition_fromState;
+    private EventAction<E, S, K, C> afterStateTransition_action;
+
+    private S onFinalStateReached_finalState;
+    private EventAction<E, S, K, C> onFinalStateReached_action;
+
+    private S onStateTransition_fromState; // For onStateTransition(S fromState, action)
+    private EventAction<E, S, K, C> onStateTransition_action;
+
+    private E onStateTransition_event; // For onStateTransition(E event, S fromState, action)
+    private S onStateTransition_event_fromState;
+    private EventAction<E, S, K, C> onStateTransition_event_action;
+    
+    private EventAction<E, S, K, C> anyStateTransitionAction; // For StateMachine.onAnyStateTransition
 
     @Getter
     private StateMachine<S,E,K,C> stateMachine;
@@ -89,27 +91,48 @@ public class StateMachineBuilder<S extends State, E extends Event, K extends Tra
 
     // New public registration methods
     public StateMachineBuilder<S, E, K, C> withBeforeAnyTransitionAction(EventAction<E, S, K, C> action) {
-        this.beforeAnyTransitionActions.add(action);
+        this.beforeAnyTransitionAction = action;
         return this;
     }
 
     public StateMachineBuilder<S, E, K, C> withAfterAnyTransitionAction(EventAction<E, S, K, C> action) {
-        this.afterAnyTransitionActions.add(action);
+        this.afterAnyTransitionAction = action;
         return this;
     }
 
     public StateMachineBuilder<S, E, K, C> withBeforeStateTransitionAction(S toState, EventAction<E, S, K, C> action) {
-        this.beforeStateTransitionActionsList.add(new ActionWithState<>(toState, action));
+        this.beforeStateTransition_toState = toState;
+        this.beforeStateTransition_action = action;
         return this;
     }
 
     public StateMachineBuilder<S, E, K, C> withAfterStateTransitionAction(S fromState, EventAction<E, S, K, C> action) {
-        this.afterStateTransitionActionsList.add(new ActionWithState<>(fromState, action));
+        this.afterStateTransition_fromState = fromState;
+        this.afterStateTransition_action = action;
         return this;
     }
 
-    public StateMachineBuilder<S, E, K, C> withFinalStateAction(S finalState, EventAction<E, S, K, C> action) {
-        this.finalStateActionsList.add(new ActionWithState<>(finalState, action));
+    public StateMachineBuilder<S, E, K, C> withOnFinalStateReachedAction(S finalState, EventAction<E, S, K, C> action) {
+        this.onFinalStateReached_finalState = finalState;
+        this.onFinalStateReached_action = action;
+        return this;
+    }
+
+    public StateMachineBuilder<S, E, K, C> withAnyStateTransitionAction(EventAction<E, S, K, C> action) {
+        this.anyStateTransitionAction = action;
+        return this;
+    }
+
+    public StateMachineBuilder<S, E, K, C> withOnStateTransitionAction(S fromState, EventAction<E, S, K, C> action) {
+        this.onStateTransition_fromState = fromState;
+        this.onStateTransition_action = action;
+        return this;
+    }
+
+    public StateMachineBuilder<S, E, K, C> withOnStateTransitionAction(E event, S fromState, EventAction<E, S, K, C> action) {
+        this.onStateTransition_event = event;
+        this.onStateTransition_event_fromState = fromState;
+        this.onStateTransition_event_action = action;
         return this;
     }
 
@@ -117,8 +140,10 @@ public class StateMachineBuilder<S extends State, E extends Event, K extends Tra
         Preconditions.checkNotNull(machineBuilderConfig, "Machine Builder Config can't be null");
         final var startState = machineBuilderConfig.getStartState();
         final var endStates = machineBuilderConfig.getEndStates();
+
+        // Create StateMachine instance with default error and event actions
         this.stateMachine = new StateMachine<>(machineBuilderConfig.getName(),
-                startState, transitionProcessorHub, errorAction, eventAction);
+                startState, transitionProcessorHub, this.errorAction, this.eventAction);
 
         // Configure basic transitions from config
         final var transitionConfigs = machineBuilderConfig.getTransitionConfigs();
@@ -129,23 +154,32 @@ public class StateMachineBuilder<S extends State, E extends Event, K extends Tra
         this.stateMachine.end(endStates);
 
         // Register all collected actions BEFORE start()
-        for (EventAction<E, S, K, C> action : beforeAnyTransitionActions) {
-            this.stateMachine.onBeforeAnyTransition(action);
+        if (beforeAnyTransitionAction != null) {
+            this.stateMachine.onBeforeAnyTransition(beforeAnyTransitionAction);
         }
-        for (EventAction<E, S, K, C> action : afterAnyTransitionActions) {
-            this.stateMachine.onAfterAnyTransition(action);
+        if (afterAnyTransitionAction != null) {
+            this.stateMachine.onAfterAnyTransition(afterAnyTransitionAction);
         }
-        for (ActionWithState<S, EventAction<E, S, K, C>> item : beforeStateTransitionActionsList) {
-            this.stateMachine.onBeforeStateTransition(item.getState(), item.getAction());
+        if (beforeStateTransition_action != null && beforeStateTransition_toState != null) {
+            this.stateMachine.onBeforeStateTransition(beforeStateTransition_toState, beforeStateTransition_action);
         }
-        for (ActionWithState<S, EventAction<E, S, K, C>> item : afterStateTransitionActionsList) {
-            this.stateMachine.onAfterStateTransition(item.getState(), item.getAction());
+        if (afterStateTransition_action != null && afterStateTransition_fromState != null) {
+            this.stateMachine.onAfterStateTransition(afterStateTransition_fromState, afterStateTransition_action);
         }
-        for (ActionWithState<S, EventAction<E, S, K, C>> item : finalStateActionsList) {
-            this.stateMachine.onFinalState(item.getState(), item.getAction());
+        if (onFinalStateReached_action != null && onFinalStateReached_finalState != null) {
+            this.stateMachine.onFinalStateReached(onFinalStateReached_finalState, onFinalStateReached_action);
         }
-
-        // Start the state machine
+        if (anyStateTransitionAction != null) {
+            this.stateMachine.onAnyStateTransition(anyStateTransitionAction);
+        }
+        if (onStateTransition_action != null && onStateTransition_fromState != null) {
+            this.stateMachine.onStateTransition(onStateTransition_fromState, onStateTransition_action);
+        }
+        if (onStateTransition_event_action != null && onStateTransition_event != null && onStateTransition_event_fromState != null) {
+            this.stateMachine.onStateTransition(onStateTransition_event, onStateTransition_event_fromState, onStateTransition_event_action);
+        }
+        
+        // Start the state machine (which also registers default actions passed to constructor)
         this.stateMachine.start();
         return stateMachine;
     }
