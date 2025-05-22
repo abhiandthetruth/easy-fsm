@@ -16,20 +16,12 @@
 package com.grookage.fsm.core;
 
 import com.google.common.base.Preconditions;
-import com.google.common.base.Preconditions;
 import com.grookage.fsm.core.action.DefaultErrorAction;
 import com.grookage.fsm.core.engine.StateEngine;
 import com.grookage.fsm.core.hubs.TransitionProcessorHub;
-import com.grookage.fsm.core.models.entities.Context;
-import com.grookage.fsm.core.models.entities.Event;
-import com.grookage.fsm.core.models.entities.State;
-import com.grookage.fsm.core.models.entities.Transition;
-import com.grookage.fsm.core.models.entities.TransitionKey;
-import com.grookage.fsm.core.models.executors.AfterStateTransitionAction;
-import com.grookage.fsm.core.models.executors.BeforeStateTransitionAction;
+import com.grookage.fsm.core.models.entities.*;
 import com.grookage.fsm.core.models.executors.ErrorAction;
 import com.grookage.fsm.core.models.executors.EventAction;
-import com.grookage.fsm.core.models.executors.FinalStateAction;
 import com.grookage.fsm.core.services.ActionService;
 import com.grookage.fsm.core.services.StateManagementService;
 import com.grookage.fsm.core.services.TransitionService;
@@ -39,7 +31,14 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 @Data
 @Slf4j
@@ -49,15 +48,25 @@ public class StateMachine<S extends State, E extends Event, K extends Transition
   private final String name;
   private final StateEngine<E, S, K, C> stateEngine;
   private final TransitionProcessorHub<S, E, K, C> transitionProcessorHub;
-  private ErrorAction<C> errorAction; // Changed generic type
-  private EventAction<E, S, K, C> eventAction;
+  private ErrorAction<E, S, K, C> errorAction; // Made non-final to allow modification if needed by onError
+  private final EventAction<E, S, K, C> eventAction; // This is the main action for transition processing
+
+  // New fields for action storage
+  private List<EventAction<E, S, K, C>> beforeAnyTransitionActions = new ArrayList<>();
+  private List<EventAction<E, S, K, C>> afterAnyTransitionActions = new ArrayList<>();
+  private Map<S, List<EventAction<E, S, K, C>>> beforeStateTransitionActions = new HashMap<>(); // Keyed by the 'to' state
+  private Map<S, List<EventAction<E, S, K, C>>> afterStateTransitionActions = new HashMap<>();  // Keyed by the 'from' state
+  private Map<S, List<EventAction<E, S, K, C>>> finalStateActions = new HashMap<>();        // Keyed by the final state
+  private Set<S> localEndStates = new HashSet<>();
+
 
   public StateMachine(
       final String name,
       final S startState,
       final TransitionProcessorHub<S, E, K, C> transitionProcessorHub,
-      ErrorAction<C> errorAction, // Changed generic type
-      EventAction<E, S, K, C> eventAction) {
+      final ErrorAction<E, S, K, C> errorAction,
+      final EventAction<E, S, K, C> eventAction
+  ) {
     this.name = name.toUpperCase(Locale.ROOT);
     this.stateEngine = new StateEngine<>(
         startState,
@@ -66,9 +75,9 @@ public class StateMachine<S extends State, E extends Event, K extends Transition
         new ActionService<>()
     );
     this.transitionProcessorHub = transitionProcessorHub;
-    this.errorAction = null != errorAction ? errorAction : new DefaultErrorAction<C>(); // Changed generic type
+    this.errorAction = null != errorAction ? errorAction : new DefaultErrorAction<>();
     this.eventAction = null != eventAction ? eventAction : context -> {
-      log.info("Default EventAction: Processing fsm transition for event {} moving from {} to {}",
+      log.info("Processing fsm transition for event {} moving from {} to {}",
           context.getCausedEvent(), context.getFrom(), context.getTo());
       final var processor = transitionProcessorHub.getProcessor(context);
       if (null == processor) {
@@ -93,9 +102,14 @@ public class StateMachine<S extends State, E extends Event, K extends Transition
     return this;
   }
 
-  public StateMachine<S, E, K, C> onError(final ErrorAction<C> action) { // Changed generic type
-    this.errorAction = action; // Store it if needed, or directly pass to stateEngine if preferred
-    stateEngine.addErrorAction(action);
+  public StateMachine<S, E, K, C> onError(final ErrorAction<E, S, K, C> action) {
+    // Note: The original design sets errorAction in StateEngine directly.
+    // To keep StateEngine unchanged, we might need to manage error actions here too,
+    // or this onError simply configures the one passed to StateEngine.
+    // For now, assuming it configures the main errorAction if needed, or adds to a list if multiple.
+    // The original implementation calls stateEngine.addError, we keep that.
+    this.errorAction = action; // if we want to replace the default one
+    stateEngine.addError(action); // Keep original behavior
     return this;
   }
 
@@ -104,8 +118,35 @@ public class StateMachine<S extends State, E extends Event, K extends Transition
     return this;
   }
 
+  // New public registration methods
+  public StateMachine<S, E, K, C> onBeforeAnyTransition(EventAction<E, S, K, C> action) {
+    this.beforeAnyTransitionActions.add(action);
+    return this;
+  }
+
+  public StateMachine<S, E, K, C> onAfterAnyTransition(EventAction<E, S, K, C> action) {
+    this.afterAnyTransitionActions.add(action);
+    return this;
+  }
+
+  public StateMachine<S, E, K, C> onBeforeStateTransition(S toState, EventAction<E, S, K, C> action) {
+    this.beforeStateTransitionActions.computeIfAbsent(toState, k -> new ArrayList<>()).add(action);
+    return this;
+  }
+
+  public StateMachine<S, E, K, C> onAfterStateTransition(S fromState, EventAction<E, S, K, C> action) {
+    this.afterStateTransitionActions.computeIfAbsent(fromState, k -> new ArrayList<>()).add(action);
+    return this;
+  }
+
+  public StateMachine<S, E, K, C> onFinalState(S finalState, EventAction<E, S, K, C> action) {
+    this.finalStateActions.computeIfAbsent(finalState, k -> new ArrayList<>()).add(action);
+    return this;
+  }
+
   public StateMachine<S, E, K, C> end(final Collection<S> endStates) {
     stateEngine.addEndStates(endStates);
+    this.localEndStates.addAll(endStates); // Populate localEndStates
     return this;
   }
 
@@ -113,111 +154,115 @@ public class StateMachine<S extends State, E extends Event, K extends Transition
   public void start() {
     Preconditions.checkNotNull(stateEngine, "State machine can't be null");
     this.stateEngine.validate();
-    // Register the default eventAction for any state transition if no specific one is added later for ANY_STATE_TRANSITION
-    // This ensures the logging and processor hub invocation happens if not overridden.
-    this.stateEngine.addAnyStateTransitionAction(this.eventAction);
-    // Register the default or provided error action.
-    this.stateEngine.addErrorAction(this.errorAction);
-  }
-
-  /**
-   * Registers an action to be executed before any state transition occurs.
-   * @param action The action to execute.
-   * @return The StateMachine instance for fluent chaining.
-   */
-  public StateMachine<S, E, K, C> onBeforeAnyTransition(final BeforeStateTransitionAction<S, E, K, C> action) {
-    stateEngine.addBeforeAnyTransitionAction(action);
-    return this;
-  }
-
-  /**
-   * Registers an action to be executed after any state transition occurs.
-   * @param action The action to execute.
-   * @return The StateMachine instance for fluent chaining.
-   */
-  public StateMachine<S, E, K, C> onAfterAnyTransition(final AfterStateTransitionAction<S, E, K, C> action) {
-    stateEngine.addAfterAnyTransitionAction(action);
-    return this;
-  }
-
-  /**
-   * Registers an action to be executed before transitioning to a specific state.
-   * @param to The target state.
-   * @param action The action to execute.
-   * @return The StateMachine instance for fluent chaining.
-   */
-  public StateMachine<S, E, K, C> onBeforeStateTransition(final S to, final BeforeStateTransitionAction<S, E, K, C> action) {
-    stateEngine.addBeforeStateTransitionAction(to, action);
-    return this;
-  }
-
-  /**
-   * Registers an action to be executed after transitioning from a specific state.
-   * @param from The source state.
-   * @param action The action to execute.
-   * @return The StateMachine instance for fluent chaining.
-   */
-  public StateMachine<S, E, K, C> onAfterStateTransition(final S from, final AfterStateTransitionAction<S, E, K, C> action) {
-    stateEngine.addAfterStateTransitionAction(from, action);
-    return this;
-  }
-
-  /**
-   * Registers an action for a specific state transition (defined by current state and event).
-   * This typically covers the main action for a transition.
-   * @param from The source state.
-   * @param event The event triggering the transition.
-   * @param action The action to execute.
-   * @return The StateMachine instance for fluent chaining.
-   */
-  public StateMachine<S, E, K, C> onStateTransition(final S from, final E event, final EventAction<E, S, K, C> action) {
-    stateEngine.addStateTransitionAction(event, from, action); // Note: StateEngine has (event, state, action)
-    return this;
-  }
-
-  /**
-   * Registers an action to be executed for any state transition.
-   * This is often used for generic logging or cross-cutting concerns.
-   * Note: The default eventAction (logging and processor hub) is already registered for any transition during start().
-   * Adding another action here will execute it in addition to the default one.
-   * @param action The action to execute.
-   * @return The StateMachine instance for fluent chaining.
-   */
-  public StateMachine<S, E, K, C> onAnyStateTransition(final EventAction<E, S, K, C> action) {
-    stateEngine.addAnyStateTransitionAction(action);
-    return this;
-  }
-
-  /**
-   * Registers an action to be executed when the FSM reaches a specific final state.
-   * @param finalState The final state.
-   * @param action The action to execute.
-   * @return The StateMachine instance for fluent chaining.
-   */
-  public StateMachine<S, E, K, C> onFinalState(final S finalState, final FinalStateAction<S, E, K, C> action) {
-    stateEngine.addFinalStateAction(finalState, action);
-    return this;
+    this.stateEngine.anyTransition(this.eventAction);
+    this.stateEngine.addError(this.errorAction);
   }
 
   @SneakyThrows
   public void fireGrace(C context) {
     Preconditions.checkNotNull(stateEngine, "StateMachine core can't be null. It seems to have not been initiated or started");
-    stateEngine
-        .getTransition(context.getFrom(), context.getCausedEvent())
-        .ifPresent(transition -> stateEngine.fire(context.getCausedEvent(), context));
+    S fromState = context.getFrom();
+    E event = context.getCausedEvent();
+    Transition<E, S> actualTransition = stateEngine.getTransition(fromState, event).orElse(null);
+
+    // Call BEFORE_ANY_TRANSITION actions
+    for (EventAction<E, S, K, C> action : beforeAnyTransitionActions) {
+      action.call(context);
+    }
+
+    if (actualTransition == null) {
+      // In fireGrace, we don't throw. We just don't proceed if no transition.
+      log.warn("No transition found from {} with event {}. fireGrace will not proceed.", fromState, event);
+      return;
+    }
+
+    S toState = actualTransition.getTo();
+    boolean originalToStateNotSet = (context.getTo() == null);
+    if (originalToStateNotSet) {
+        context.setTo(toState);
+    }
+
+    // Call BEFORE_STATE_TRANSITION actions for the specific 'toState'
+    for (EventAction<E, S, K, C> action : beforeStateTransitionActions.getOrDefault(toState, Collections.emptyList())) {
+        action.call(context);
+    }
+
+    // Core state engine transition
+    stateEngine.fire(event, context); // This will execute the main eventAction via ActionService
+
+    // Post-transition actions
+    // context.setFrom(fromState); // fromState is already correct
+    // context.setTo(toState); // toState was set
+
+    for (EventAction<E, S, K, C> action : afterStateTransitionActions.getOrDefault(fromState, Collections.emptyList())) {
+        action.call(context);
+    }
+
+    for (EventAction<E, S, K, C> action : afterAnyTransitionActions) {
+        action.call(context);
+    }
+
+    if (this.localEndStates.contains(toState)) {
+        for (EventAction<E, S, K, C> action : finalStateActions.getOrDefault(toState, Collections.emptyList())) {
+            action.call(context);
+        }
+    }
+    
+    if (originalToStateNotSet) {
+        context.setTo(null); 
+    }
   }
 
   @SneakyThrows
   public void fire(C context) {
     Preconditions.checkNotNull(stateEngine, "StateMachine core can't be null. It seems to have not been initiated or started");
-    stateEngine
-        .getTransition(context.getFrom(), context.getCausedEvent())
-        .ifPresentOrElse(transition -> stateEngine.fire(context.getCausedEvent(), context),
-            () -> {
-              throw new IllegalArgumentException(
-                  "Can't find a transition from " + context.getFrom() + " with event "
-                      + context.getTo());
-            });
-  }
+    S fromState = context.getFrom();
+    E event = context.getCausedEvent();
+    Transition<E, S> actualTransition = stateEngine.getTransition(fromState, event).orElse(null);
 
+    // Call BEFORE_ANY_TRANSITION actions
+    for (EventAction<E, S, K, C> action : beforeAnyTransitionActions) {
+        action.call(context);
+    }
+
+    if (actualTransition == null) {
+        throw new IllegalArgumentException("Can't find a transition from " + fromState + " with event " + event);
+    }
+
+    S toState = actualTransition.getTo();
+    boolean originalToStateNotSet = (context.getTo() == null);
+    if (originalToStateNotSet) {
+        context.setTo(toState);
+    }
+
+    // Call BEFORE_STATE_TRANSITION actions for the specific 'toState'
+    for (EventAction<E, S, K, C> action : beforeStateTransitionActions.getOrDefault(toState, Collections.emptyList())) {
+        action.call(context);
+    }
+
+    // Core state engine transition
+    stateEngine.fire(event, context); // This will execute the main eventAction via ActionService
+
+    // Post-transition actions
+    // context.setFrom(fromState); // fromState is already correct
+    // context.setTo(toState); // toState was set
+
+    for (EventAction<E, S, K, C> action : afterStateTransitionActions.getOrDefault(fromState, Collections.emptyList())) {
+        action.call(context);
+    }
+
+    for (EventAction<E, S, K, C> action : afterAnyTransitionActions) {
+        action.call(context);
+    }
+
+    if (this.localEndStates.contains(toState)) {
+        for (EventAction<E, S, K, C> action : finalStateActions.getOrDefault(toState, Collections.emptyList())) {
+            action.call(context);
+        }
+    }
+    
+    if (originalToStateNotSet) {
+        context.setTo(null); 
+    }
+  }
 }

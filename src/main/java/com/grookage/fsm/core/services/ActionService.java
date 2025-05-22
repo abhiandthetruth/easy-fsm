@@ -16,24 +16,13 @@
 package com.grookage.fsm.core.services;
 
 import com.grookage.fsm.core.exceptions.FsmException;
-import com.grookage.fsm.core.exceptions.FsmException;
-import com.grookage.fsm.core.models.entities.Context;
-import com.grookage.fsm.core.models.entities.Event;
-import com.grookage.fsm.core.models.entities.EventType;
-import com.grookage.fsm.core.models.entities.HandlerType;
-import com.grookage.fsm.core.models.entities.State;
-import com.grookage.fsm.core.models.entities.TransitionKey;
+import com.grookage.fsm.core.models.entities.*;
 import com.grookage.fsm.core.models.executors.Action;
-import com.grookage.fsm.core.models.executors.AfterStateTransitionAction;
-import com.grookage.fsm.core.models.executors.BeforeStateTransitionAction;
 import com.grookage.fsm.core.models.executors.ErrorAction;
 import com.grookage.fsm.core.models.executors.EventAction;
-import com.grookage.fsm.core.models.executors.FinalStateAction;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -44,102 +33,89 @@ import java.util.Objects;
 @SuppressWarnings({"unchecked", "rawtypes"})
 public class ActionService<E extends Event, S extends State, K extends TransitionKey, C extends Context<S, E, K>> {
 
-  private final Map<HandlerType<E, S>, List<Action>> handlers;
+  private final Map<HandlerType<E, S>, Action> handlers;
 
   public ActionService() {
     handlers = new HashMap<>();
   }
 
-  public void anyTransition(EventAction<E, S, K, C> action) {
-    addHandler(new HandlerType<>(EventType.ANY_STATE_TRANSITION, null, null), action);
+  public void anyTransition(EventAction<E, S, K, C> context) {
+    handlers.put(new HandlerType<>(EventType.ANY_STATE_TRANSITION, null, null), context);
   }
 
-  public void beforeTransition(S state, BeforeStateTransitionAction<S, E, K, C> action) {
-    addHandler(Objects.isNull(state) ?
+  public void beforeTransition(S state, EventAction<E, S, K, C> context) {
+    handlers.put(Objects.isNull(state) ?
             new HandlerType<>(EventType.BEFORE_ANY_TRANSITION, null, null)
             : new HandlerType<>(EventType.BEFORE_STATE_TRANSITION, null, state),
-        action
+        context
     );
   }
 
-  public void afterTransition(S state, AfterStateTransitionAction<S, E, K, C> action) {
-    addHandler(Objects.isNull(state) ?
+  public void afterTransition(S state, EventAction<E, S, K, C> context) {
+    handlers.put(Objects.isNull(state) ?
             new HandlerType<>(EventType.AFTER_ANY_TRANSITION, null, null)
             : new HandlerType<>(EventType.AFTER_STATE_TRANSITION, null, state),
-        action
+        context
     );
   }
 
-  public void forTransition(E event, S state, EventAction<E, S, K, C> action) {
-    addHandler(new HandlerType<>(EventType.STATE_TRANSITION, event, state), action);
+  public void forTransition(E event, S state, EventAction<E, S, K, C> context) {
+    handlers.put(new HandlerType<>(EventType.STATE_TRANSITION, event, state), context);
   }
 
-  public void onFinalState(S state, FinalStateAction<S, E, K, C> action) {
-    addHandler(new HandlerType<>(EventType.FINAL_STATE, null, state), action);
+  public void onFinalState(S state, EventAction<E, S, K, C> context) {
+    handlers.put(new HandlerType<>(EventType.FINAL_STATE, null, state), context);
   }
 
-  public void handleTransition(E event, S from, S to, C context) {
-    executeActions(new HandlerType<>(EventType.STATE_TRANSITION, null, from), from, to, event, context);
-    executeActions(new HandlerType<>(EventType.STATE_TRANSITION, event, from), from, to, event, context);
-    executeActions(new HandlerType<>(EventType.ANY_STATE_TRANSITION, null, null), from, to, event, context);
+  public void handleTransition(E event, S from, C context) {
+    var handler = handlers.get(new HandlerType(EventType.STATE_TRANSITION, null, from));
+    if (!Objects.isNull(handler)) {
+      ((EventAction<E, S, K, C>) handler).call(context);
+    }
+
+    handler = handlers.get(new HandlerType(EventType.STATE_TRANSITION, event, from));
+    if (!Objects.isNull(handler)) {
+      ((EventAction<E, S, K, C>) handler).call(context);
+    }
+
+    handler = handlers.get(new HandlerType(EventType.ANY_STATE_TRANSITION, null, null));
+    if (!Objects.isNull(handler)) {
+      ((EventAction<E, S, K, C>) handler).call(context);
+    }
   }
 
-  public void handleLanding(S to, E event, S from, C context) {
-    executeActions(new HandlerType<>(EventType.AFTER_STATE_TRANSITION, null, to), from, to, event, context);
-    executeActions(new HandlerType<>(EventType.AFTER_ANY_TRANSITION, null, null), from, to, event, context);
+  public void handleLanding(S from, C context) {
+    var handler = handlers.get(new HandlerType(EventType.AFTER_STATE_TRANSITION, null, from));
+    if (!Objects.isNull(handler)) {
+      ((EventAction<E, S, K, C>) handler).call(context);
+    }
+
+    handler = handlers.get(new HandlerType(EventType.AFTER_ANY_TRANSITION, null, null));
+    if (!Objects.isNull(handler)) {
+      ((EventAction<E, S, K, C>) handler).call(context);
+    }
   }
 
-  public void handleTakeOff(S from, E event, S to, C context) {
-    executeActions(new HandlerType<>(EventType.BEFORE_STATE_TRANSITION, null, from), from, to, event, context);
-    executeActions(new HandlerType<>(EventType.BEFORE_ANY_TRANSITION, null, null), from, to, event, context);
-  }
+  public void handleTakeOff(S to, C context) {
+    var handler = handlers.get(new HandlerType(EventType.BEFORE_STATE_TRANSITION, null, to));
+    if (!Objects.isNull(handler)) {
+      ((EventAction<E, S, K, C>) handler).call(context);
+    }
 
-  public void handleFinalState(S finalState, C context) {
-    List<Action> actions = handlers.get(new HandlerType<>(EventType.FINAL_STATE, null, finalState));
-    if (!Objects.isNull(actions)) {
-      for (Action action : actions) {
-        if (action instanceof FinalStateAction) {
-          ((FinalStateAction<S, E, K, C>) action).execute(finalState, context);
-        } else if (action instanceof EventAction) {
-          ((EventAction<E, S, K, C>) action).call(context);
-        }
-      }
+    handler = handlers.get(new HandlerType(EventType.BEFORE_ANY_TRANSITION, null, null));
+    if (!Objects.isNull(handler)) {
+      ((EventAction<E, S, K, C>) handler).call(context);
     }
   }
 
   public void handleError(FsmException error) {
-    List<Action> actions = handlers.get(new HandlerType<>(EventType.ERROR, null, null));
-    if (!Objects.isNull(actions)) {
-      for (Action action : actions) {
-        if (action instanceof ErrorAction) {
-          ((ErrorAction<C>) action).call(error, (C) error.getContext());
-        } else if (action instanceof EventAction) {
-          ((EventAction<E, S, K, C>) action).call((C) error.getContext());
-        }
-      }
+    var handler = handlers.get(new HandlerType(EventType.ERROR, null, null));
+    if (!Objects.isNull(handler)) {
+      ((ErrorAction) handler).call(error, error.getContext());
     }
   }
 
   public void setHandler(EventType eventType, S state, E event, Action action) {
-    addHandler(new HandlerType<>(eventType, event, state), action);
-  }
-
-  private void addHandler(HandlerType<E, S> handlerType, Action action) {
-    handlers.computeIfAbsent(handlerType, k -> new ArrayList<>()).add(action);
-  }
-
-  private void executeActions(HandlerType<E, S> handlerType, S from, S to, E event, C context) {
-    List<Action> actions = handlers.get(handlerType);
-    if (!Objects.isNull(actions)) {
-      for (Action action : actions) {
-        if (action instanceof BeforeStateTransitionAction && (handlerType.getEventType() == EventType.BEFORE_ANY_TRANSITION || handlerType.getEventType() == EventType.BEFORE_STATE_TRANSITION)) {
-          ((BeforeStateTransitionAction<S, E, K, C>) action).execute(from, to, event, context);
-        } else if (action instanceof AfterStateTransitionAction && (handlerType.getEventType() == EventType.AFTER_ANY_TRANSITION || handlerType.getEventType() == EventType.AFTER_STATE_TRANSITION)) {
-          ((AfterStateTransitionAction<S, E, K, C>) action).execute(from, to, event, context);
-        } else if (action instanceof EventAction) {
-          ((EventAction<E, S, K, C>) action).call(context);
-        }
-      }
-    }
+    handlers.put(new HandlerType(eventType, event, state), action);
   }
 }
