@@ -86,11 +86,6 @@ public class StateMachine<S extends State, E extends Event, K extends Transition
     return this;
   }
 
-  public StateMachine<S, E, K, C> onError(final ErrorAction<E, S, K, C> eventAction) {
-    stateEngine.addError(eventAction);
-    return this;
-  }
-
   public StateMachine<S, E, K, C> onTransition(final E event, final S from, final S to) {
     addTransition(event, from, to);
     return this;
@@ -100,8 +95,6 @@ public class StateMachine<S extends State, E extends Event, K extends Transition
     stateEngine.addEndStates(endStates);
     return this;
   }
-
-  // New methods delegating to StateEngine:
 
   public StateMachine<S, E, K, C> onBeforeAnyTransition(EventAction<E, S, K, C> action) {
     this.stateEngine.beforeTransition(action);
@@ -120,11 +113,6 @@ public class StateMachine<S extends State, E extends Event, K extends Transition
 
   public StateMachine<S, E, K, C> onAfterStateTransition(S fromState, EventAction<E, S, K, C> action) {
     this.stateEngine.afterTransitionFrom(fromState, action);
-    return this;
-  }
-
-  public StateMachine<S, E, K, C> onAnyStateTransition(EventAction<E, S, K, C> action) {
-    this.stateEngine.anyTransition(action);
     return this;
   }
 
@@ -147,8 +135,8 @@ public class StateMachine<S extends State, E extends Event, K extends Transition
   public void start() {
     Preconditions.checkNotNull(stateEngine, "State machine can't be null");
     this.stateEngine.validate();
-    this.stateEngine.anyTransition(this.eventAction); // Default anyTransition registration
-    this.stateEngine.addError(this.errorAction); // Default error registration
+    this.stateEngine.anyTransition(this.eventAction);
+    this.stateEngine.addError(this.errorAction);
   }
 
   @SneakyThrows

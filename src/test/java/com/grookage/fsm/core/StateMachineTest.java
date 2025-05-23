@@ -23,6 +23,8 @@ import com.grookage.fsm.core.stubs.TestContext;
 import com.grookage.fsm.core.stubs.TestEvent;
 import com.grookage.fsm.core.stubs.TestState;
 import java.util.concurrent.atomic.AtomicBoolean;
+
+import com.grookage.fsm.core.stubs.TestTransitionKey;
 import org.junit.Assert;
 import org.junit.Test;
 
@@ -91,8 +93,6 @@ public class StateMachineTest {
     stateMachineCore.getStateEngine().fire(TestEvent.INITIATE, testContext);
   }
 
-  // New tests for StateMachine action registration methods
-
   @Test
   public void testStateMachine_onBeforeAnyTransition() {
     final var stateMachine = StateMachineHelper.getValidStateMachine();
@@ -103,6 +103,7 @@ public class StateMachineTest {
     final var testContext = new TestContext();
     testContext.setFrom(TestState.STARTED);
     testContext.setCausedEvent(TestEvent.INITIATE);
+    testContext.setTo(TestState.IN_PROGRESS);
     stateMachine.fire(testContext);
     Assert.assertTrue("onBeforeAnyTransition action should be executed", actionExecuted.get());
   }
@@ -117,6 +118,7 @@ public class StateMachineTest {
     final var testContext = new TestContext();
     testContext.setFrom(TestState.STARTED);
     testContext.setCausedEvent(TestEvent.INITIATE);
+    testContext.setTo(TestState.IN_PROGRESS);
     stateMachine.fire(testContext);
     Assert.assertTrue("onAfterAnyTransition action should be executed", actionExecuted.get());
   }
@@ -133,7 +135,8 @@ public class StateMachineTest {
 
     final var testContext = new TestContext();
     testContext.setFrom(TestState.STARTED);
-    testContext.setCausedEvent(TestEvent.INITIATE); // Transitions to CREATED
+    testContext.setCausedEvent(TestEvent.INITIATE);
+    testContext.setTo(TestState.CREATED);
     stateMachine.fire(testContext);
 
     Assert.assertTrue("onBeforeStateTransition for CREATED state should be executed", correctActionExecuted.get());
@@ -153,77 +156,12 @@ public class StateMachineTest {
     final var testContext = new TestContext();
     testContext.setFrom(TestState.STARTED);
     testContext.setCausedEvent(TestEvent.INITIATE);
+    testContext.setTo(TestState.IN_PROGRESS);
     stateMachine.fire(testContext);
 
     Assert.assertTrue("onAfterStateTransition for STARTED state should be executed", correctActionExecuted.get());
     Assert.assertFalse("onAfterStateTransition for CREATED state should NOT be executed", wrongActionExecuted.get());
   }
-
-  @Test
-  public void testStateMachine_onAnyStateTransition_OverridesDefault() {
-    // StateMachine's start() method registers its constructor-provided eventAction (this.eventAction)
-    // by calling this.stateEngine.anyTransition().
-    // If we call stateMachine.onAnyStateTransition() before start(), it should register another one,
-    // but ActionService (at this commit 663dcac) stores only one action.
-    // So the one registered via stateMachine.onAnyStateTransition() should be the one that runs.
-    final var stateMachine = StateMachineHelper.getValidStateMachine();
-    final var defaultActionExecuted = new AtomicBoolean(false); // Should NOT be executed
-    final var specificActionExecuted = new AtomicBoolean(false);
-
-    // Replace the default eventAction in StateMachineHelper for this test
-    // This is a bit of a workaround as StateMachineHelper directly creates the StateMachine
-    // Ideally, we'd pass a custom default action to the constructor.
-    // For now, we test if onAnyStateTransition overrides the one set in start().
-    // StateMachine's constructor's eventAction is the one that logs and calls hub.
-    // stateMachine.setEventAction(ctx -> defaultActionExecuted.set(true)); // Cannot do this, field is final
-
-    stateMachine.onAnyStateTransition(context -> specificActionExecuted.set(true));
-    // The default eventAction (logging & hub) is registered by stateMachine.start() using
-    // stateEngine.anyTransition(). If onAnyStateTransition is called, ActionService will
-    // overwrite the previous one.
-    stateMachine.start();
-
-
-    final var testContext = new TestContext();
-    testContext.setFrom(TestState.STARTED);
-    testContext.setCausedEvent(TestEvent.INITIATE);
-    stateMachine.fire(testContext);
-
-    Assert.assertTrue("Specific onAnyStateTransition action should be executed", specificActionExecuted.get());
-    // Assert.assertFalse("Default eventAction from constructor should NOT be executed if overridden", defaultActionExecuted.get());
-    // The above assertFalse is tricky because the default this.eventAction is what's registered by start().
-    // If onAnyStateTransition is called *after* start(), it would override. If *before*, start() would override it.
-    // Given onAnyStateTransition calls stateEngine.anyTransition, and start() also calls stateEngine.anyTransition(this.eventAction),
-    // the one called last wins. StateMachine.start() is typically called after all on... configurations.
-    // So, the this.eventAction (logging & hub) from constructor is expected to be the one running.
-    // Let's re-evaluate: The goal is to test `StateMachine.onAnyStateTransition`.
-    // If `stateMachine.onAnyStateTransition(myAction)` is called, `myAction` is passed to `stateEngine.anyTransition`.
-    // Then `stateMachine.start()` is called, which calls `stateEngine.anyTransition(this.eventAction)`.
-    // So `this.eventAction` (the default logging/hub one) should be the one active.
-    // This means this test needs to be structured to verify if an action added *in addition* to the default one runs,
-    // or if it *replaces* it. Since ActionService replaces, the LAST one registered wins.
-    // Thus, if we call onAnyStateTransition *after* start(), it should replace. But that's not typical usage.
-    // Let's assume typical usage: configure then start.
-    // The test below `testStateMachine_onAnyStateTransition_CalledAfterStart_OverridesDefault` covers the override.
-    // For this test, it should verify the one passed to constructor is indeed the one if not "overridden" by a later call.
-  }
-  
-  @Test
-  public void testStateMachine_onAnyStateTransition_CalledAfterStart_OverridesDefault() {
-    final var stateMachine = StateMachineHelper.getValidStateMachine();
-    final var overridingActionExecuted = new AtomicBoolean(false);
-
-    stateMachine.start(); // Default eventAction (logging + hub) is registered
-    stateMachine.onAnyStateTransition(context -> overridingActionExecuted.set(true)); // This should override
-
-    final var testContext = new TestContext();
-    testContext.setFrom(TestState.STARTED);
-    testContext.setCausedEvent(TestEvent.INITIATE);
-    stateMachine.fire(testContext);
-
-    Assert.assertTrue("Overriding onAnyStateTransition action should be executed", overridingActionExecuted.get());
-  }
-
 
   @Test
   public void testStateMachine_onStateTransition_FromState() {
@@ -235,6 +173,7 @@ public class StateMachineTest {
     final var testContext = new TestContext();
     testContext.setFrom(TestState.STARTED);
     testContext.setCausedEvent(TestEvent.INITIATE);
+    testContext.setTo(TestState.IN_PROGRESS);
     stateMachine.fire(testContext);
     Assert.assertTrue("onStateTransition(fromState) action should be executed", actionExecuted.get());
   }
@@ -252,6 +191,7 @@ public class StateMachineTest {
     final var testContext = new TestContext();
     testContext.setFrom(TestState.STARTED);
     testContext.setCausedEvent(TestEvent.INITIATE);
+    testContext.setTo(TestState.FAILED);
     stateMachine.fire(testContext);
 
     Assert.assertTrue("Correct onStateTransition(event, fromState) action should be executed", correctActionExecuted.get());
@@ -265,53 +205,26 @@ public class StateMachineTest {
     stateMachine.onFinalStateReached(TestState.COMPLETED, context -> actionExecuted.set(true));
     stateMachine.start();
 
-    // Sequence to reach final state
-    TestContext ctx1 = new TestContext();
-    ctx1.setFrom(TestState.STARTED);
-    ctx1.setCausedEvent(TestEvent.INITIATE);
-    stateMachine.fire(ctx1); // To CREATED
 
-    TestContext ctx2 = new TestContext();
-    ctx2.setFrom(TestState.CREATED);
-    ctx2.setCausedEvent(TestEvent.MOVE_TO_PROGRESS);
-    stateMachine.fire(ctx2); // To IN_PROGRESS
+    TestContext testContext1 = new TestContext();
+    testContext1.setFrom(TestState.STARTED);
+    testContext1.setCausedEvent(TestEvent.INITIATE);
+    testContext1.setTo(TestState.CREATED);
+    stateMachine.fire(testContext1);
+
+    TestContext testContext2 = new TestContext();
+    testContext2.setFrom(TestState.CREATED);
+    testContext2.setCausedEvent(TestEvent.MOVE_TO_PROGRESS);
+    testContext2.setTo(TestState.IN_PROGRESS);
+    stateMachine.fire(testContext2);
 
     TestContext finalContext = new TestContext();
     finalContext.setFrom(TestState.IN_PROGRESS);
     finalContext.setCausedEvent(TestEvent.MOVE_TO_COMPLETED);
-    stateMachine.fire(finalContext); // To COMPLETED
+    finalContext.setTo(TestState.COMPLETED);
+    stateMachine.fire(finalContext);
 
     Assert.assertTrue("onFinalStateReached action should be executed", actionExecuted.get());
-  }
-
-  @Test
-  public void testStateMachine_onError_OverridesDefault() {
-    final var stateMachine = StateMachineHelper.getValidStateMachine();
-    final var overridingErrorActionExecuted = new AtomicBoolean(false);
-
-    // Default error action is registered in StateMachine.start()
-    // Call stateMachine.onError() *after* start to override the default
-    stateMachine.start();
-    stateMachine.onError((ErrorAction<TestEvent, TestState, TestTransitionKey, TestContext>) (error, context) -> overridingErrorActionExecuted.set(true));
-
-    // Trigger an error by firing an event that leads to an action throwing an exception
-    // For this, we need an action that throws. Let's use onAfterStateTransition for simplicity
-    stateMachine.onAfterStateTransition(TestState.STARTED, context -> {
-      throw new RuntimeException("Simulated error");
-    });
-
-    final var testContext = new TestContext();
-    testContext.setFrom(TestState.STARTED);
-    testContext.setCausedEvent(TestEvent.INITIATE); // This transition will have the erroring action
-
-    try {
-        stateMachine.fire(testContext);
-    } catch (Exception e) {
-        // Expected if the error action doesn't suppress it or if it's rethrown.
-        // StateEngine's default behavior is to call handleError which then calls the registered ErrorAction.
-        // DefaultErrorAction logs. If we override it, our logic runs.
-    }
-    Assert.assertTrue("Overriding onError action should be executed", overridingErrorActionExecuted.get());
   }
 
 }
